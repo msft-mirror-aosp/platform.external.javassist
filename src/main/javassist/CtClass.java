@@ -69,7 +69,7 @@ public abstract class CtClass {
     /**
      * The version number of this release.
      */
-    public static final String version = "3.24.1-GA";
+    public static final String version = "3.30.2-GA";
 
     /**
      * Prints the version number and the copyright notice.
@@ -80,7 +80,7 @@ public abstract class CtClass {
      */
     public static void main(String[] args) {
         System.out.println("Javassist version " + CtClass.version);
-        System.out.println("Copyright (C) 1999-2018 Shigeru Chiba."
+        System.out.println("Copyright (C) 1999-2023 Shigeru Chiba."
                            + " All Rights Reserved.");
     }
 
@@ -200,12 +200,12 @@ public abstract class CtClass {
      */
     @Override
     public String toString() {
-        StringBuffer buf = new StringBuffer(getClass().getName());
-        buf.append("@");
+        StringBuilder buf = new StringBuilder(getClass().getName());
+        buf.append('@');
         buf.append(Integer.toHexString(hashCode()));
-        buf.append("[");
+        buf.append('[');
         extendToString(buf);
-        buf.append("]");
+        buf.append(']');
         return buf.toString();
     }
 
@@ -213,7 +213,7 @@ public abstract class CtClass {
      * Implemented in subclasses to add to the {@link #toString()} result.
      * Subclasses should put a space before each token added to the buffer.
      */
-    protected void extendToString(StringBuffer buffer) {
+    protected void extendToString(StringBuilder buffer) {
         buffer.append(getName());
     }
 
@@ -330,6 +330,14 @@ public abstract class CtClass {
      */
     public boolean isArray() {
         return false;
+    }
+
+    /**
+     * Returns <code>true</code> if this object represents a Kotlin class.
+     * @since 3.26
+     */
+    public boolean isKotlin() {
+        return hasAnnotation("kotlin.Metadata");
     }
 
     /**
@@ -1415,7 +1423,7 @@ public abstract class CtClass {
     public void detach() {
         ClassPool cp = getClassPool();
         CtClass obj = cp.removeCached(getName());
-        if (obj != this)
+        if (obj != null && obj != this)
             cp.cacheCtClass(getName(), obj, false);
     }
 

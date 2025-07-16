@@ -1,6 +1,10 @@
 package javassist;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
 import java.lang.annotation.Annotation;
+import java.lang.reflect.Method;
 import java.lang.reflect.TypeVariable;
 
 import javassist.bytecode.AccessFlag;
@@ -9,17 +13,18 @@ import javassist.bytecode.AttributeInfo;
 import javassist.bytecode.ClassFile;
 import javassist.bytecode.ConstPool;
 import javassist.bytecode.InnerClassesAttribute;
+import javassist.bytecode.MethodInfo;
+import javassist.bytecode.MethodParametersAttribute;
 import javassist.bytecode.NestHostAttribute;
 import javassist.bytecode.NestMembersAttribute;
 import javassist.expr.ExprEditor;
 import javassist.expr.Handler;
 import javassist.expr.MethodCall;
+import javassist.expr.NewExpr;
+import junit.framework.Assert;
 
 @SuppressWarnings({"rawtypes","unchecked","unused"})
 public class JvstTest5 extends JvstTestRoot {
-    public JvstTest5(String name) {
-        super(name);
-    }
 
     public void testDollarClassInStaticMethod() throws Exception {
         CtClass cc = sloader.makeClass("test5.DollarClass");
@@ -159,7 +164,7 @@ public class JvstTest5 extends JvstTestRoot {
         CtClass cc = sloader.makeClass("test5.JIRA256");
         ClassFile ccFile = cc.getClassFile();
         ConstPool constpool = ccFile.getConstPool();
-         
+
         AnnotationsAttribute attr = new AnnotationsAttribute(constpool, AnnotationsAttribute.visibleTag);
         javassist.bytecode.annotation.Annotation entityAnno
             = new javassist.bytecode.annotation.Annotation("test5.Entity", constpool);
@@ -174,7 +179,7 @@ public class JvstTest5 extends JvstTestRoot {
         assertTrue(o.getClass().getName().equals("test5.JIRA256"));
 
         java.lang.annotation.Annotation[] annotations = o.getClass().getDeclaredAnnotations();
-        assertEquals(1, annotations.length); 
+        assertEquals(1, annotations.length);
     }
 
     public void testJIRA250() throws Exception {
@@ -452,5 +457,190 @@ public class JvstTest5 extends JvstTestRoot {
         CtClass cc = sloader.get("test5.NestHost2$Foo");
         cc.getClassFile().compact();
         cc.toClass(test5.DefineClassCapability.class);
+    }
+
+    public void testSwitchCaseWithStringConstant() throws Exception {
+        CtClass cc = sloader.get("test5.SwitchCase");
+        cc.addMethod(CtNewMethod.make(
+                "public int run() {" +
+                "    String s = \"foobar\";\n" +
+                "    switch (s) {\n" +
+                "    case STR1: return 1;\n" +
+                "    case \"foobar\": return 2;\n" +
+                "    default: return 3; }\n" +
+                "}\n", cc));
+        cc.writeFile();
+        Object obj = make(cc.getName());
+        assertEquals(2, invoke(obj, "run"));   
+    }
+
+    public void testNestPrivateConstructor() throws Exception {
+        CtClass cc = sloader.get("test5.NestHost3$Builder");
+        cc.instrument(new ExprEditor() {
+            public void edit(NewExpr e) throws CannotCompileException {
+                String code = "$_ = $proceed($$);";
+                e.replace(code);
+            }
+        });
+        cc.writeFile();
+        try {
+            Class<?> nestHost3Class = cloader.loadClass("test5.NestHost3");
+            Object builder = nestHost3Class.getDeclaredMethod("builder").invoke(nestHost3Class);
+            Class<?> nestHost3BuilderClass = cloader.loadClass("test5.NestHost3$Builder");
+            nestHost3BuilderClass.getDeclaredMethod("build").invoke(builder);
+        } catch (Exception ex) {
+            ex.printStackTrace();
+            fail("it should be able to access the private constructor of the nest host");
+        }
+    }
+
+    public void testNestPrivateConstructor2() throws Exception {
+        CtClass cc = sloader.get("test5.NestHost4$InnerClass1");
+        cc.instrument(new ExprEditor() {
+            public void edit(NewExpr e) throws CannotCompileException {
+                String code = "$_ = $proceed($$);";
+                e.replace(code);
+            }
+        });
+        cc.writeFile();
+
+        cc = sloader.get("test5.NestHost4$InnerClass1$InnerClass5");
+        cc.instrument(new ExprEditor() {
+            public void edit(NewExpr e) throws CannotCompileException {
+                String code = "$_ = $proceed($$);";
+                e.replace(code);
+            }
+        });
+        cc.writeFile();
+        try {
+            Class<?> nestHost4Class = cloader.loadClass("test5.NestHost4");
+            nestHost4Class.getDeclaredConstructor().newInstance();
+        } catch (Exception ex) {
+            ex.printStackTrace();
+            fail("it should be able to access the private constructor of the nest host");
+        }
+    }
+
+    public void testSwitchCaseWithStringConstant2() throws Exception {
+        CtClass cc = sloader.makeClass("test5.SwitchCase2");
+        cc.addMethod(CtNewMethod.make(
+                "public int run() {" +
+                "    String s = \"foo\";\n" +
+                "    switch (s) {\n" +
+                "    case test5.SwitchCase.STR1: return 1;\n" +
+                "    case \"foobar\": return 2;\n" +
+                "    }\n" +
+                "    return 3;\n" +
+                "}\n", cc));
+        cc.writeFile();
+        Object obj = make(cc.getName());
+        assertEquals(1, invoke(obj, "run"));   
+    }
+
+    // Issue #241
+    public void testInsertBeforeAndDollarR() throws Exception {
+        CtClass cc = sloader.get(test5.InsertBeforeDollarR.class.getName());
+        CtMethod m = cc.getDeclaredMethod("foo");
+        m.insertBefore("{ if ($1 == 1) return ($r)$2; }");
+        try {
+            m.insertBefore("{ $_ = \"bar\"; }");
+            assertTrue(false);
+        } catch (CannotCompileException e) {}
+        cc.writeFile();
+        Object obj = make(cc.getName());
+        assertEquals(1, invoke(obj, "run"));
+    }
+
+    // Issue #275
+    public void testRedundantInsertAfter() throws Exception {
+        CtClass cc = sloader.get(test5.InsertAfter.class.getName());
+        CtMethod m = cc.getDeclaredMethod("foo");
+        m.insertAfter("{ $_ += 1; }", false, true);
+        CtMethod m2 = cc.getDeclaredMethod("bar");
+        m2.insertAfter("{ $_ += 1; }", true, true);
+        cc.writeFile();
+        Object obj = make(cc.getName());
+        assertEquals(71 + 22, invoke(obj, "run"));
+    }
+
+    // PR #294
+    public void testEmptyArrayInit() throws Exception {
+        CtClass cc = sloader.makeClass("test5.EmptyArrayInit");
+        CtMethod m = CtNewMethod.make("public int[] foo(){ int[] a = {}; return a; }", cc);
+        cc.addMethod(m);
+        CtMethod m2 = CtNewMethod.make("public int[] bar(){ int[] a = new int[]{}; return a; }", cc);
+        cc.addMethod(m2);
+        CtMethod m3 = CtNewMethod.make("public String[] baz(){ String[] a = { null }; return a; }", cc);
+        cc.addMethod(m3);
+        CtMethod m0 = CtNewMethod.make("public int run() { return foo().length + bar().length + baz().length; }", cc);
+        cc.addMethod(m0);
+        cc.writeFile();
+        Object obj = make(cc.getName());
+        assertEquals(1, invoke(obj, "run"));
+    }
+
+    public void testTooManyConstPoolItems() throws Exception {
+        CtClass cc = sloader.makeClass("TooManyConstPoolItems");
+        ClassFile cf = cc.getClassFile();
+        ConstPool cPool = cf.getConstPool();
+        int size = cPool.getSize();
+        while (cPool.getSize() < 65536 - 6)
+            cPool.addIntegerInfo(cPool.getSize());
+
+        cc.writeFile();
+        cc.defrost();
+        cPool.addIntegerInfo(-1);
+        try {
+            cc.writeFile();
+            fail("too many items were accepted");
+        }
+        catch (CannotCompileException e) {}
+    }
+
+    public void testGithubIssue462Java21WithoutParameters() throws IOException {
+
+        //This is a class file compiled by Java-21
+        //javac Java21InnerClassWithoutParameters.java
+        //public class Java21InnerClassWithoutParameters {
+        //    class InnerClass implements Runnable {
+        //        public void run() {
+        //        }
+        //    }
+        //}
+        String classFileName = "./Java21InnerClassWithoutParameters$InnerClass.class";
+        ClassLoader classLoader = getClass().getClassLoader();
+        File classFile = new File(classLoader.getResource(classFileName).getFile());
+        
+        CtClass cc = sloader.makeClass(new FileInputStream(classFile));
+        cc.getClassFile().compact();
+
+        ClassFile cf = cc.getClassFile2();
+        ConstPool cp = cf.getConstPool();
+        
+        MethodInfo minfo = cf.getMethod("<init>");
+        MethodParametersAttribute attr
+                = (MethodParametersAttribute)minfo.getAttribute(MethodParametersAttribute.tag);
+        assertEquals(1, attr.size());
+        assertNull(attr.parameterName(0));
+    }
+
+    public void testSuperCall() throws Exception {
+        String javacResult = new BearKeeper().javacResult();
+        assertEquals("Man feed(Bear)", javacResult);
+
+        CtClass cc = sloader.get("javassist.BearKeeper");
+        CtMethod cm = CtMethod.make(
+                "public String javassistResult() {return super.feed(new javassist.Bear());}",
+                cc);
+        cc.addMethod(cm);
+        cc.setModifiers(Modifier.PUBLIC);
+        cc.writeFile();
+        Object obj = make(cc.getName());
+        Method m = obj.getClass().getMethod("javassistResult");
+        Object javassistResult = m.invoke(obj);
+
+        //before this fix
+        //expected:<Man feed(Bear)> but was:<Keeper feed(Animal)>
+        assertEquals(javacResult, javassistResult);
     }
 }
